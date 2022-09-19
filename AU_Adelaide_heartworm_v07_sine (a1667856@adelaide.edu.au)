@@ -1,0 +1,1009 @@
+library(maptools); library(raster); library(sf); library(sp); library(rgeos); library(rgdal); library(devtools)
+
+#set working directory
+#mac: 
+#setwd("/Users/Peter/Library/CloudStorage/Box-Box/PhD/HDU Mapping/Mapping/minimum_temperature_2011-2015")
+
+setwd("C:/Users/a1667856/Box/PhD/HDU Mapping/Mapping//sine/sine2011-2015")
+setwd("C:/Users/a1667856/Box/PhD/HDU Mapping/Mapping")
+
+#epilab:
+setwd("D:/Peter Atkinson/HDU Mapping/Maps")
+setwd("D:/Peter Atkinson/HDU Mapping/SILO data/sine")
+
+
+#source("D:\\Software\\Statistics\\R\\dev\\make\\epiR\\misc\\code\\epi.saveplot.r")
+
+# General approach: (1) read in BOM temperature data and calculate HDU for each day of a given year (on local machine); 
+#(2) use VLSCI (cloud comp) to calculated 30-day cumulative HDUs; (3) create maps of CHDU on local machine.
+
+# Charles: calculate an annual average. Or cumulative HDUs for a year = 47450 (130 * 365.25).
+
+# Set the raster file names:
+dseq <- seq(from = as.Date("01-01-2015", format = "%d-%m-%Y"), to = as.Date("31-12-2100", format = "%d-%m-%Y"), by = 1)
+min.pname <- paste("mi", format(dseq, format = "%Y%m%d"), ".txt", sep = "")
+max.pname <- paste("mx", format(dseq, format = "%Y%m%d"), ".txt", sep = "")
+
+hdu.pname <- paste("hdu", format(dseq, format = "%Y%m%d"), ".tif", sep = "")
+chdu.pname <- paste("chdu", format(dseq, format = "%Y%m%d"), ".tif", sep = "")
+img.pname <- paste("chdu", format(dseq, format = "%Y%m%d"), sep = "")
+
+#unzip("D:\\Maps\\Oceania\\Australia\\vector\\AU_adm.zip")
+auadm0ll.sf <- st_read(dsn=getwd(), layer="AU_adm0_gen-LL")
+plot(auadm0ll.sf)
+plot(auadm0ll.sf, max.plot=12)
+auadm0ll.bb <- st_bbox(auadm0ll.sf)
+
+
+# Read in the text files and calculate HDU. Write the text file out as a TIF file. Use sine T method:
+#i=1
+
+for(i in 1:length(dseq)){
+  # for(i in 1:length(dseq)){
+  tmin.r <- raster(min.pname[i])
+  #plot(tmin.r)
+  
+  tmax.r <- raster(max.pname[i])
+  # windows(); plot(tmax.r)
+  
+  Tavg <- (tmax.r+tmin.r)/2
+  base <- 14
+  W <- (tmax.r-tmin.r)/2
+  Q <- (base-Tavg)/W
+  
+  #transform >1 into 1, <-1 into -1
+  
+  Q[Q < -1] <- -1
+  Q[Q > 1] <- 1
+  
+  A <- asin(Q)
+  
+  #calculate the HDU per day
+  thdu.r <- ((W*cos(A))-((base-Tavg)*((pi/2)-A)))/pi
+  
+  # windows(); plot(thdu.r)
+  
+  # If HDU is less than zero, assign a value of zero:
+  thdu.r[thdu.r < 0] <- 0
+  
+  # Write the HDU raster out as a GTiff file:
+  writeRaster(x = thdu.r, filename = hdu.pname[i], overwrite = TRUE , format = "GTiff")
+  cat(i, "\n"); flush.console()
+}
+
+
+
+# ===================================================================================================
+# Preparation of R objects for the VLSCI (Cloud computer):
+
+library(sf); library(raster)
+
+dseq <- seq(from = as.Date("01-01-1981", format = "%d-%m-%Y"), to = as.Date("31-12-2020", format = "%d-%m-%Y"), by = 1)
+min.pname <- paste("mi", format(dseq, format = "%Y%m%d"), ".txt", sep = "")
+max.pname <- paste("mx", format(dseq, format = "%Y%m%d"), ".txt", sep = "")
+
+hdu.pname <- paste("hdu", format(dseq, format = "%Y%m%d"), ".tif", sep = "")
+chdu.pname <- paste("chdu", format(dseq, format = "%Y%m%d"), ".tif", sep = "")
+img.pname <- paste("chdu", format(dseq, format = "%Y%m%d"), sep = "")
+
+auadm0ll.sf <- st_read(dsn=getwd(), layer="AU_adm0_gen-LL")
+plot(auadm0ll.sf)
+
+#generates coordinate limits of the map
+auadm0ll.bb <- st_bbox(auadm0ll.sf)
+
+auadm0ll.r <- raster(auadm0ll.sf)
+
+# Create a data frame of file indexes and the path to the source HDU files, the destination CHDU file names ('chdu' = cumulative HDU) and the image files:
+obname <- data.frame(idx = 1:length(hdu.pname), hdu = hdu.pname, chdu = chdu.pname, img = img.pname)
+
+# Calculate cumulative HDUs for the previous nday days (CHDU > 130 = heartworm risk). Here ndays is set to 30:
+nday <- 30
+
+# Create a copy of aupoly.r (see below) and make sure this is in the workspace:
+
+# Save these objects as an RData file (note inclusion of aupoly.r --- created below):
+save(list = c("dseq", "min.pname", "max.pname", "hdu.pname", "chdu.pname", "img.pname", "auadm0ll.sf", "auadm0ll.bb", "obname", "nday", "auadm0ll.r"), file = "AU_CHDU_raster_2011.RData")
+
+# Save this *.RData file to D:\Contracts\Australia\UoA\Heartworm\VLSCI.
+
+
+# ===================================================================================================
+# Code for the cluster (for testing only):
+it = 0
+
+library(sf); library(raster); library(devtools); library(spatialkernel)
+
+#load(file = "AU_CHDU_raster_2011.RData")
+
+# Run the following code once with i set to 30 to get an aupoly.r object. This saves having to calculate aupoly.r for each iteration (which takes time).
+
+# Create an array of day cutpoints in first iteration:
+it <- it + 1
+dcut <- cut(32:length(dseq), breaks = 10)
+dcut.n <- match(dcut, levels(dcut))
+
+ord <- which(dcut.n == it)
+ord <- (32:length(dseq))[ord]
+
+i=32
+
+#for(i in 32:365)
+#for(i in ord)
+for(i in 12017:length(dseq)){
+  # Select each day of interest in turn and list the HDU rasters for the previous 30 days:
+  idx.start <- i - (nday - 1)
+  idx.stop <- i
+  idx <- idx.start:idx.stop 
+  thdu.fname <- as.character(obname[idx,2])
+  
+  tStack <- stack()
+  for(j in 1:length(thdu.fname)){
+    traster <- raster(thdu.fname[j])
+    tStack <- stack(tStack, traster)
+  }
+  
+  # Sum all the values in the raster stack:
+  tchdu.r <- calc(tStack, sum)
+  
+  # Plot to check:
+  # windows(); 
+  #plot(tchdu.r)
+  
+  # Crop the raster to the shape file spatial extent:
+  #tchdu.crop <- crop(tchdu.r, aupoly.ext, snap = "out")
+  
+  # Dummy raster with a spatial extent equal to the cropped raster, but full of NA values:
+  
+  #cropping the map - the raster map is currently a large rectangle, need to have Australia overlaid
+  tchdu.cr <- crop(tchdu.r, st_bbox(auadm0ll.sf), snap = "out")
+  crop <- setValues(tchdu.cr, NA)
+  auadm0ll.r <- rasterize(auadm0ll.sf, crop)
+  ##this final line is cropping the map of Australia around the plot of cHDUs
+  tchdu.r <- mask(x = tchdu.cr, mask = auadm0ll.r)
+  
+  # Rasterise the catchment boundaries, with NA outside the catchment boundaries:
+  # aupoly.r <- rasterize(aupoly.shp, crop)
+  
+  # Put NAs in all the raster cells outside the shape file boundary:
+  #tchdu.mask <- mask(x = tchdu.crop, mask = aupoly.r)
+  
+  # Plot to check, using 130HDU as the cut-off level:
+  plot(tchdu.r)
+  contour(tchdu.r, levels = 130, lty = 1, add = TRUE, lwd=1.5, col="purple")
+  plot(auadm0ll.sf, add = TRUE, colour="transparent", border="#696969")
+  
+  #Windows stuff
+  #epi.saveplot(as.character(obname[i,4]))
+  #dev.off()
+  
+  # Write the summed raster (i.e. the CHDU file) out as a GTiff:
+  writeRaster(x = tchdu.r, filename = as.character(obname[i,3]), overwrite = TRUE , format = "GTiff")
+  cat(i, "\n"); flush.console()   
+}
+
+
+# ===================================================================================================
+# Create a time series map of CHDU:
+
+setwd("C:/Users/a1667856/Box/PhD/HDU Mapping/Mapping/sine/sine2011-2015")
+
+# Set the raster file names:
+dseq <- seq(from = as.Date("01-01-2011", format = "%d-%m-%Y"), to = as.Date("31-12-2011", format = "%d-%m-%Y"), by = 1)
+chdu.pname <- paste("chdu", format(dseq, format = "%Y%m%d"), ".tif", sep = "")
+img.pname <- paste("AU_chdu", format(dseq, format = "%Y%m%d"), sep = "")
+
+#unzip("D:\\Maps\\Oceania\\Australia\\vector\\AU_adm.zip")
+auadm0ll.sf <- st_read(dsn=getwd(), layer="AU_adm0_gen-LL")
+
+#  epi.saveplot(img.pname[i])
+
+# Read in the first 365 rasters and plot CHDU:
+for(i in 32:length(dseq)){
+  tchdu.r <- raster(chdu.pname[i])
+  
+  windows(); plot(tchdu.r, xlab = "Longitude", ylab = "Latitude")
+  plot(auadm0ll.sf, add = TRUE)
+  writeRaster(x = tchdu.r, filename = img.pname[i], overwrite = TRUE , format = "GTiff")
+  dev.off()
+  cat(i, "\n"); flush.console()   
+}
+
+auadm0ll.sf <- st_read(dsn=getwd(), layer="AU_adm0_gen-LL")
+plot(auadm0ll.sf)
+plot(auadm0ll.sf, max.plot=12)
+auadm0ll.bb <- st_bbox(auadm0ll.sf)
+
+
+# ===================================================================================================
+# Read in CHDU maps, agreggate into one week blocks make a plot then save map series as an animated GIF:
+
+library(maptools); library(raster); library(spatialkernel);library(devtools)
+
+source("D:\\Software\\Statistics\\R\\dev\\make\\epiR\\misc\\code\\epi.saveplot.r")
+
+# Copy CHDU rasters to working directory:
+#unzip("D:\\Contracts\\Australia\\UoA\\Heartworm\\VLSCI\\2015\\AU_CHDU_01-Jan-2015_to_31-Dec-2015.zip")
+
+# Generate a list of raster file names:
+dseq <- seq(from = as.Date("01-01-2011", format = "%d-%m-%Y"), to = as.Date("31-12-2015", format = "%d-%m-%Y"), by = 1)
+hdu.fname <- paste("chdu", format(dseq, format = "%Y%m%d"), ".tif", sep = "")
+img.fname <- paste("chdu_week_", 1:52, ".png", sep = "")
+tif.fname <- paste("chdu_week_", 1:52, ".tif", sep = "")
+
+wid <- c(rep(1:52, each = 7), 52)
+ofile <- data.frame(wid, hdu = hdu.fname)
+
+#unzip("D:\\Maps\\Oceania\\Australia\\vector\\AU_adm.zip")
+auadm0ll.sf <- st_read(dsn=getwd(), layer="AU_adm0_gen-LL")
+auadm0ll.bb <- st_bbox(auadm0ll.sf)
+aupoly.ext <- extent(auadm0ll.sf)
+
+# This function creates a PNG and a TIF for each week of the year. The TIF is used for the space-time KML plot, below:
+
+# Read in the rasters and calculate weekly average CHDU:
+for(i in 6:52){
+  id <- ofile$wid == i
+  tofile <- ofile[id,]
+  
+  tStack <- stack()
+  for(j in 1:length(tofile$hdu)){
+    traster <- raster(as.character(tofile$hdu[j]))
+    tStack <- stack(tStack, traster)
+  }
+  
+  # Calculated the mean for the raster stack:
+  tchdu.r <- calc(tStack, mean)
+  
+  # Write the stacked raster out as a TIF:
+  writeRaster(x = tchdu.r, filename = as.character(tif.fname[i]), overwrite = TRUE , format = "GTiff")
+  
+  breaks <- seq(from = 0, to = 800, by = 100)
+  cols <- terrain.colors(n = length(breaks) - 1, alpha = 1)
+  sdate <- as.character(tofile[1,2])
+  
+  sdate <- substr(sdate, start = 5, stop = 12)
+  sdate <- as.Date(sdate, format = "%Y%m%d")
+  sdate <- format(sdate, format = "%d-%b-%Y")
+  
+  windows(); plot(x = aupoly.ext[1:2], y = aupoly.ext[3:4], type = "n", xlab = "Longitude", ylab = "Latitude")
+  image(tchdu.r, col = cols, breaks = breaks, add = TRUE, zlim = c(0,1000))
+  plot(auadm0ll.sf, add = TRUE, colour="transparent", border="#696969")
+  contour(tchdu.r, levels = 130, lty = 1, add = TRUE, lwd=1.5, col="purple", drawlabels=TRUE)
+  text(x = aupoly.ext[1] + 4, y = aupoly.ext[3] + 2, labels = sdate)
+  metre(xl = aupoly.ext[1], yb = aupoly.ext[3] + 24, xr = aupoly.ext[1] + 1, yt = aupoly.ext[3] + 33, lab = breaks, cols = cols, shift = 0, cex = 0.80)
+  savePlot(filename = img.fname[i], type = c("png"), device = dev.cur())
+  dev.off()
+  
+  cat(i, "\n"); flush.console()
+}
+
+# ===================================================================================================
+# Create an animated GIF file:
+
+library(animation); library(magick) ;library(dplyr); library(magrittr)
+
+fname <- list.files(path = "C:/Users/a1667856/Box/PhD/HDU Mapping/Mapping//sine/cHDUsine2011", pattern = "*.png")
+
+list.files(path="C:/Users/a1667856/Box/PhD/HDU Mapping/Mapping/sine/cHDUsine2011", pattern = '*.png', full.names = TRUE) %>% 
+  image_read() %>% # reads each path file
+  image_join() %>% # joins image
+  image_animate(fps=1) %>% # animates, can opt for number of loops
+  image_write("chdu2011sine.gif") # write to current dir
+
+
+
+#Older Mark code
+# Convert PNGs to GIFs (from the DOS prompt, suing ImageMagick):
+#C: 
+#CD C:/Users/a1667856/Box/PhD/HDU Mapping/Mapping/minimum_temperature_2011-2015
+#mogrify -format gif *.png
+
+#convert -delay 150 -size 100x100 -page +0+0 chdu_week_01.gif -page +0+0 chdu_week_02.gif -page +0+0 chdu_week_03.gif -page +0+0 chdu_week_04.gif -page +0+0 chdu_week_05.gif -page +0+0 chdu_week_06.gif -page +0+0 chdu_week_07.gif -page +0+0 chdu_week_08.gif -page +0+0 chdu_week_09.gif -page +0+0 chdu_week_10.gif -page +0+0 chdu_week_11.gif -page +0+0 chdu_week_12.gif -page +0+0 chdu_week_13.gif -page +0+0 chdu_week_14.gif -page +0+0 chdu_week_15.gif -page +0+0 chdu_week_16.gif -page +0+0 chdu_week_17.gif -page +0+0 chdu_week_18.gif -page +0+0 chdu_week_19.gif -page +0+0 chdu_week_20.gif -page +0+0 chdu_week_21.gif -page +0+0 chdu_week_22.gif -page +0+0 chdu_week_23.gif -page +0+0 chdu_week_24.gif -page +0+0 chdu_week_25.gif -page +0+0 chdu_week_26.gif -page +0+0 chdu_week_27.gif -page +0+0 chdu_week_28.gif -page +0+0 chdu_week_29.gif -page +0+0 chdu_week_30.gif -page +0+0 chdu_week_31.gif -page +0+0 chdu_week_32.gif -page +0+0 chdu_week_33.gif -page +0+0 chdu_week_34.gif -page +0+0 chdu_week_35.gif -page +0+0 chdu_week_36.gif -page +0+0 chdu_week_37.gif -page +0+0 chdu_week_38.gif -page +0+0 chdu_week_39.gif -page +0+0 chdu_week_40.gif -page +0+0 chdu_week_41.gif -page +0+0 chdu_week_42.gif -page +0+0 chdu_week_43.gif -page +0+0 chdu_week_44.gif -page +0+0 chdu_week_45.gif -page +0+0 chdu_week_46.gif -page +0+0 chdu_week_47.gif -page +0+0 chdu_week_48.gif -page +0+0 chdu_week_49.gif -page +0+0 chdu_week_50.gif -page +0+0 chdu_week_51.gif chdu_week_52.gif -page +0+0 -loop 0 AU_CHDU_Jan-1981_Dec-1981.gif
+
+
+# Convert PNGs to MPGs:
+#D:
+#CD D:\TEMP
+
+#convert -delay 150 chdu_week_01.png chdu_week_02.png chdu_week_03.png chdu_week_04.png chdu_week_05.png chdu_week_06.png chdu_week_07.png chdu_week_08.png chdu_week_09.png chdu_week_10.png chdu_week_11.png chdu_week_12.png chdu_week_13.png chdu_week_14.png chdu_week_15.png chdu_week_16.png chdu_week_17.png chdu_week_18.png chdu_week_19.png chdu_week_20.png chdu_week_21.png chdu_week_22.png chdu_week_23.png chdu_week_24.png chdu_week_25.png chdu_week_26.png chdu_week_27.png chdu_week_28.png chdu_week_29.png chdu_week_30.png chdu_week_31.png chdu_week_32.png chdu_week_33.png chdu_week_34.png chdu_week_35.png chdu_week_36.png chdu_week_37.png chdu_week_38.png chdu_week_39.png chdu_week_40.png chdu_week_41.png chdu_week_42.png chdu_week_43.png chdu_week_44.png chdu_week_45.png chdu_week_46.png chdu_week_47.png chdu_week_48.png chdu_week_49.png chdu_week_50.png chdu_week_51.png chdu_week_52.png AU_CHDU_2015.mpg
+
+
+# ===================================================================================================
+#Make a csv of the cHDUs
+library(maptools); library(raster); library(spatialkernel)
+
+setwd("D:\\TEMP")
+source("D:\\Software\\Statistics\\R\\dev\\make\\epiR\\misc\\code\\epi.saveplot.r")
+
+# Copy CHDU rasters to working directory:
+unzip("D:\\Contracts\\Australia\\UoA\\Heartworm\\VLSCI\\AU_CHDU_01-Jan-2015_to_31-Dec-2015.zip")
+
+unzip("F:\\Maps\\Oceania\\Australia\\vector\\AU_states.zip")
+austate.shp <- readShapePoly("AU_states-wgs84")
+
+id <- austate.shp$NAM == "VICTORIA"
+vic.shp <- austate.shp[id,]
+
+# Generate a list of raster file names:
+dseq <- seq(from = as.Date("01-01-2015", format = "%d-%m-%Y"), to = as.Date("31-12-2015", format = "%d-%m-%Y"), by = 1)
+hdu.fname <- paste("chdu", format(dseq, format = "%Y%m%d"), ".tif", sep = "")
+
+# Create a *.csv file listing raster cell identifier, date, lon, lat and chdu: 
+for(i in 1:365){
+  traster <- raster(as.character(hdu.fname[i]))
+  traster <- mask(traster, vic.shp)
+  
+  tdat <- as.data.frame(rasterToPoints(traster))
+  tdat[,3] <- round(tdat[,3], digits = 0)
+  
+  tdat$date <- dseq[i]
+  tdat$id <- 1:nrow(tdat)
+  tdat <- tdat[,c(5,4,1,2,3)]
+  names(tdat)[5] <- "chdu"
+  write.table(tdat, file = "AU_Vic_CHDU_2015.csv", append = TRUE, sep = ",", row.names = FALSE, col.names = FALSE)
+}
+
+
+#=============================================================================
+#Aim to calcuate area where HDU is >130, and if this changes from year to year with climate change
+
+setwd("C:/Users/a1667856/Box/PhD/HDU Mapping/Mapping/sine/sine2011-2015")
+
+# Set the raster file names:
+dseq <- seq(from = as.Date("01-01-2040", format = "%d-%m-%Y"), to = as.Date("31-12-2040", format = "%d-%m-%Y"), by = 1)
+chdu.pname <- paste("chdu", format(dseq, format = "%Y%m%d"), ".tif", sep = "")
+img.pname <- paste("AU_chdu", format(dseq, format = "%Y%m%d"), sep = "")
+
+#Reproject into cartesian coordinates, using Australian Albers Projection
+
+auadm0alb.sf <- st_transform(auadm0ll.sf, crs=3577)
+plot(auadm0alb.sf, axes=TRUE)
+
+#read in for a given day
+tchdu <- 'chdu20400101.tif'
+tchdu.r <- raster(tchdu)
+
+tchdu.r <- projectRaster(tchdu.r, crs=CRS("+init=epsg:3577")) #reprojecting the map, with metres on each axis not degrees. CRS is a global map ID system
+plot(tchdu.r, axes=TRUE)
+
+#figuring out the length and width of the plot
+summary(tchdu.r)
+print(tchdu.r)
+names(print(tchdu.r))
+bbox(tchdu.r)
+tchdu.bb <- bbox(tchdu.r)
+xextent <- (tchdu.bb[1,2] - tchdu.bb[1,1])/ncol(tchdu.r) #how wide in m is each pixel in the raster?
+yextent <- (tchdu.bb[2,2] - tchdu.bb[2,1])/nrow(tchdu.r) #how high in m is each pixel in the raster?
+ncol(tchdu.r)
+
+rasterarea <- (xextent/1000)*(yextent/1000) #what is the area of each pixel in the raster, in sqKm?
+
+#Step 2: raster map calc: area where HDU>130=1, HDU<130=0, #Step 3: sum the raster cells and convert into an area. Size of each cell and count the 1s
+
+#make a function to make all HDU<130 = 0, all HDU>=130 = 1
+myFun <- function(x) {ifelse(x >= 130, 1, 0)}
+Rn <- calc(tchdu.r, myFun)
+Rn
+
+rval <- freq(Rn) #how many 0s and 1s are there? Remember that there are a whole bunch of NAs, which are outside of Australia (in the ocean)
+hdu130.pct <- rval[2,2] / sum(rval[1:2,2]) #what is the percent of 1s? i.e what % of the area of Australia has >130HDUs today?
+
+#now we want to put the % in a dataframe with the date on it. End goal: have a whole bunch of dates and HDUs, 
+#showing how it changes with time (i.e. climate change)
+
+#Output: x=date, y=CHDU area
+
+#sine
+chdusine.df <- data.frame(Date=dseq, PercentHDU=NA)
+chdusine.df$PercentHDU[i] <- hdu130.pct
+
+#Now set the loop. Start with i=32 (because we are accounting for the previous 30 days). This will then put the %HDU into each corresponding date
+
+for(i in 1:366){
+  tchdu.r <- raster(chdu.pname[i])
+  #tchdu.r <- projectRaster(tchdu.r, crs=CRS("+init=epsg:3577"))
+  myFun <- function(x) {ifelse(x >= 130, 1, 0)}
+  Rn <- calc(tchdu.r, myFun)
+  Rn
+  rval <- freq(Rn)
+  hdu130.pct <- rval[2,2] / sum(rval[1:2,2])
+  
+  
+  chdusine.df$PercentHDU[i] <- hdu130.pct
+  cat(i, "\n"); flush.console()
+}
+
+
+#Plot the percentages vs time
+library(ggplot2)
+ggplot(chdusine.df, aes(Date, PercentHDU)) + geom_line(colour='black')
+
+ggplot() + 
+  geom_line(data=chdusine.df, aes(x=Date, y=PercentHDU), color='black') + 
+  geom_line(data=chdutriangle.df, aes(x=Date, y=PercentHDU), color='blue')
+
+write.csv(chdusine.df,"//uofa/users$/users6/a1667856/Desktop//cHDU_sine_2040.csv", row.names = FALSE)
+
+
+#read in previous data
+setwd("C:/Users/a1667856/Box/PhD/HDU Mapping/Mapping/SILO data")
+chdu_dates <- read.csv("cHDU_sineSILO.csv")
+
+seq <- seq(from = as.Date("01-01-1970", format = "%d-%m-%Y"), to = as.Date("31-12-2021", format = "%d-%m-%Y"), by = 1)
+
+chdu_dates$Date <- seq
+
+class(chdu_dates$Date)
+
+chdu_1980 <- subset(chdu_dates, Date >= "1980-01-01" & Date <= "1980-12-31")
+
+ggplot() + 
+  #geom_line(data=chdusine.df, aes(x=Date, y=PercentHDU), color='black') + 
+  geom_line(data=chdusine.df, aes(x=Date, y=PercentHDU), color='blue')+
+  ylim(0, 1)
+
+summary(chdusine.df$PercentHDU)
+summary(chdu_2020$PercentHDU)
+summary(chdu_1980$PercentHDU)
+
+
+# ===================================================================================================
+
+library(maptools); library(raster); library(spatialkernel); library(rgdal); library(spatstat)
+
+setwd("D:\\TEMP")
+source("D:\\Software\\Statistics\\R\\dev\\make\\epiR\\misc\\code\\epi.saveplot.r")
+
+dat <- read.table("AU_Vic_CHDU_2015.csv", header = FALSE, sep = ",")
+names(dat) <- c("id","edate","lon","lat","chdu")
+
+# Read in Victorian postcode shapefile:
+unzip("F:\\Maps\\Oceania\\Australia\\vector\\AU_POA_2014.zip")
+auspoa.shp <- readOGR(".", "POA_2011_AUST")
+
+# Convert POA_CODE into numeric:
+auspoa.shp$POA_CODE <- as.numeric(levels(auspoa.shp$POA_CODE))[auspoa.shp$POA_CODE] 
+
+# Victorian postcodes only:
+id <- auspoa.shp$POA_CODE >= 3000 & auspoa.shp$POA_CODE < 4000
+vicpoa.shp <- auspoa.shp[id,]
+
+windows(); plot(vicpoa.shp)
+
+# Select a postcode:
+postcode <- 3039
+
+id <- vicpoa.shp$POA_CODE == postcode
+
+# Create an owin:
+tdat.w <- as(as(vicpoa.shp[id,], "SpatialPolygons"), "owin")
+
+# Create a ppp object:
+id <- inside.owin(dat[,3], y = dat[,4], w = tdat.w)
+
+dat.ppp <- ppp(x = dat[,3], y = dat[,4], window = tdat.w)
+
+
+# ===================================================================================================
+# KML space-time raster map:
+
+library(rgdal); library(maptools); library(raster); library(plotKML)
+setwd("D:\\TEMP")
+
+# Generate a sequence of start and stop dates each week. Here's the code used to create the weekly maps (above):
+# dseq <- seq(from = as.Date("01-01-2015", format = "%d-%m-%Y"), to = as.Date("31-12-2015", format = "%d-%m-%Y"), by = 1)
+# wid <- c(rep(1:52, each = 7), 52)
+# drange <- data.frame(dseq, wid)
+
+unzip("D:\\Contracts\\Australia\\UoA\\Heartworm\\data\\AU_CHDU_2015_weekly_TIFs.zip")
+
+sdate <- seq(from = as.Date("01-01-2015", format = "%d-%m-%Y"), to = as.Date("31-12-2015", format = "%d-%m-%Y"), by = 7)
+edate <- seq(from = as.Date("07-01-2015", format = "%d-%m-%Y"), to = as.Date("31-12-2015", format = "%d-%m-%Y"), by = 7)
+ifname <- paste("chdu_week_", 1:52, ".tif", sep = "")
+
+sdate <- as.POSIXct(sdate[1:52])
+edate <- as.POSIXct(edate)
+
+# Create a raster stack from the TIFs:
+tStack <- stack()
+for(i in 1:52){
+  traster <- raster(as.character(ifname[i]))
+  projection(traster) <- CRS("+init=epsg:4326")
+  tStack <- stack(tStack, traster)
+}
+
+# Convert the raster stack to a raster brick:
+hw_ll <- brick(tStack)
+hw_ll@title = "Cumulative heartworm degree units"
+
+# Create a time series image plot of CHDU:
+locid <- c("Roseworthy", "Werribee", "Camden", "Gatton"); lon <- c(138.7493,144.6936,150.6958,152.2800); lat <- c(-34.5337,-37.8893,-34.0542,-27.5630)
+dat <- data.frame(locid, lon, lat)
+coords <- SpatialPoints(dat[, c("lon", "lat")])
+dat.ll <- SpatialPointsDataFrame(coords, dat)
+proj4string(dat.ll) <- CRS("+init=epsg:4326")
+
+# Construct an object of class RasterBrickTimeSeries that contains variable name, sample points, rasters and time period:
+AU_CHDU_2015.ts <- new("RasterBrickTimeSeries", variable = "CHDU", sampled = dat.ll, rasters = hw_ll, TimeSpan.begin = sdate, TimeSpan.end = edate)
+
+breaks <- seq(from = 0, to = 800, by = 100)
+cols <- terrain.colors(n = length(breaks) - 1, alpha = 1)
+
+# Write the RasterBrickTimeSeries out as a KML file:
+plotKML(AU_CHDU_2015.ts, colour_scale = cols)
+
+
+# ===================================================================================================
+# Run this set of code if you want PNGs to be semitransparent in Google Earth:
+
+# Make a list of input file names:
+ifname <- paste("chdu_week_", 1:52, ".png", sep = "")
+
+# Create the ImageMagick command string. Note the use of #in to refer to the input file name:
+convert.cmd <- 'convert D:\\TEMP\\#in  -alpha set -channel A -evaluate set 50% D:\\TEMP\\#in' 
+
+for(i in 3:length(ifname)){ 
+  shell(gsub("#in", ifname[i], convert.cmd), shell = Sys.getenv("COMSPEC")) 
+} 
+
+
+# ===================================================================================================
+#Run using climate change modelled data
+
+library(ncdf4); library(raster); library(sf); library(dplyr); library(tiff); library(exactextractr); library(sp); library(rgdal); library(spatial.tools)
+library(mmap)
+
+setwd("C://Users/a1667856/Box/PhD/HDU Mapping/Maps")
+
+auadm0ll.sf <- st_read(dsn=getwd(), layer="AU_adm0_gen-LL")
+plot(auadm0ll.sf)
+plot(auadm0ll.sf, max.plot=12)
+auadm0ll.bb <- st_bbox(auadm0ll.sf)
+
+setwd("C:/Users/a1667856/Box/PhD/HDU Mapping/Mapping/SILO data/hdu/sine")
+hdu <- "hdu20110101.tif"
+#set this as the 'model' raster, with the goal resolution extent etc
+modelmask.r <- raster(hdu)
+plot(modelmask.r)
+
+#contour(modelmask.r, levels = 130, lty = 1, add = TRUE, lwd=1.5, col="purple")
+
+setwd("C:/Users/a1667856/Box/PhD/HDU Mapping/Climate change material/Models/SSP1/hdu")
+
+library(sf); library(raster)
+
+dseq <- seq(from = as.Date("01-01-2064", format = "%d-%m-%Y"), to = as.Date("31-12-2100", format = "%d-%m-%Y"), by = 1)
+min.pname <- paste("mi", format(dseq, format = "%Y%m%d"), ".txt", sep = "")
+max.pname <- paste("mx", format(dseq, format = "%Y%m%d"), ".txt", sep = "")
+
+hdu.pname <- paste("hdu", format(dseq, format = "%Y%m%d"), ".tif", sep = "")
+chdu.pname <- paste("chdu", format(dseq, format = "%Y%m%d"), ".tif", sep = "")
+img.pname <- paste("chdu", format(dseq, format = "%Y%m%d"), sep = "")
+
+auadm0ll.sf <- st_read(dsn=getwd(), layer="AU_adm0_gen-LL")
+plot(auadm0ll.sf)
+
+#generates coordinate limits of the map
+auadm0ll.bb <- st_bbox(auadm0ll.sf)
+
+auadm0ll.r <- raster(auadm0ll.sf)
+
+# Create a data frame of file indexes and the path to the source HDU files, the destination CHDU file names ('chdu' = cumulative HDU) and the image files:
+obname <- data.frame(idx = 1:length(hdu.pname), hdu = hdu.pname, chdu = chdu.pname, img = img.pname)
+
+# Calculate cumulative HDUs for the previous nday days (CHDU > 130 = heartworm risk). Here ndays is set to 30:
+nday <- 30
+
+# Save these objects as an RData file (note inclusion of aupoly.r --- created below):
+save(list = c("dseq", "min.pname", "max.pname", "hdu.pname", "chdu.pname", "img.pname", "auadm0ll.sf", "auadm0ll.bb", "obname", "nday", "auadm0ll.r"), file = "AU_CHDU_raster_2011.RData")
+
+# Save this *.RData file to D:\Contracts\Australia\UoA\Heartworm\VLSCI.
+
+
+library(sf); library(raster); library(devtools); #library(spatialkernel)
+
+# Run the following code once with i set to 30 to get an aupoly.r object. This saves having to calculate aupoly.r for each iteration (which takes time).
+
+# Create an array of day cutpoints in first iteration:
+it=0
+it <- it + 1
+dcut <- cut(32:length(dseq), breaks = 10)
+dcut.n <- match(dcut, levels(dcut))
+
+ord <- which(dcut.n == it)
+ord <- (32:length(dseq))[ord]
+
+#years:
+#2015: 1:2192
+#2022: i=2258
+#2040: i=9132 -> i=9497
+#2050: i=12785 -> i=13149
+#2060: 16437:16802
+#2090: 27359:27759
+
+vals <- c(tchdu.cr@data@values)
+
+i=32
+
+#for(i in 32:365)
+#for(i in ord)
+
+#2080
+for(i in 6192:6210){
+  # Select each day of interest in turn and list the HDU rasters for the previous 30 days:
+  idx.start <- i - (nday - 1)
+  idx.stop <- i
+  idx <- idx.start:idx.stop 
+  thdu.fname <- as.character(obname[idx,2])
+  
+  tStack <- stack()
+  for(j in 1:length(thdu.fname)){
+    traster <- raster(thdu.fname[j])
+    tStack <- stack(tStack, traster)
+  }
+  
+  # Sum all the values in the raster stack:
+  tchdu.r <- calc(tStack, sum)
+
+  # Plot to check
+  #windows(); 
+  plot(tchdu.r)
+  
+  #now we need to interpolate the data to increase resolution. Using the 'modelmask.r' raster, which has the resolution/extent from hdu20110101.tif
+  tchdu_corrected.r <- spatial_sync_raster(tchdu.r, modelmask.r, method="ngb", size_only=FALSE, raster_size=TRUE)
+  plot(tchdu_corrected.r)
+  
+  # Crop the raster to the shape file spatial extent:
+  #tchdu.crop <- crop(tchdu.r, aupoly.ext, snap = "out")
+  
+  # Dummy raster with a spatial extent equal to the cropped raster, but full of NA values:
+  
+  #cropping the map - the raster map is currently a large rectangle, need to have Australia overlaid
+  tchdu.cr <- crop(tchdu_corrected.r, st_bbox(auadm0ll.sf), snap = "out")
+  crop <- setValues(tchdu.cr, NA)
+  auadm0ll.r <- rasterize(auadm0ll.sf, crop)
+  ##this final line is cropping the map of Australia around the plot of cHDUs
+  tchdu.r <- mask(x = tchdu.cr, mask = auadm0ll.r)
+  
+  # Rasterise the catchment boundaries, with NA outside the catchment boundaries:
+  # aupoly.r <- rasterize(aupoly.shp, crop)
+  
+  # Put NAs in all the raster cells outside the shape file boundary:
+  #tchdu.mask <- mask(x = tchdu.crop, mask = aupoly.r)
+  
+  # Plot to check, using 130HDU as the cut-off level:
+  plot(tchdu.r)
+  contour(tchdu.r, levels = 130, lty = 1, add = TRUE, lwd=1.5, col="purple")
+  plot(auadm0ll.sf, add = TRUE, colour="transparent", border="#696969")
+  
+  writeRaster(x = tchdu.r, filename = as.character(obname[i,3]), overwrite = TRUE , format = "GTiff")
+  cat(i, "\n"); flush.console()   
+}
+
+tester <- "chdu20800801.tif"
+tester.r <- raster(tester)
+
+plot(tester.r)
+contour(tester.r, levels = 130, lty = 1, add = TRUE, lwd=1.5, col="purple")
+
+
+##
+# hdu <- "hdu20401011.tif"
+# hdu.r <- raster(hdu)
+# plot(hdu.r)
+# 
+# thdu_corrected.r <- spatial_sync_raster(hdu.r, modelmask.r, method="ngb", size_only=FALSE, raster_size=TRUE)
+# plot(thdu_corrected.r)
+# 
+# thdu.cr <- crop(thdu_corrected.r, st_bbox(auadm0ll.sf), snap = "out")
+# crop <- setValues(thdu.cr, NA)
+# auadm0ll.r <- rasterize(auadm0ll.sf, crop)
+# ##this final line is cropping the map of Australia around the plot of cHDUs
+# thdu.r <- mask(x = thdu.cr, mask = auadm0ll.r)
+# plot(thdu.r)
+
+# ===================================================================================================
+#Charles: can we figure out how many days of the year each location is HW friendly?
+
+#step 1: make binary hdu maps (0 -> <130, 1 -> >130). 2: stack these maps on a yearly basis. 3: for each cell, count how many days are >130
+
+library(maptools); library(raster); library(sf); library(sp); library(rgeos); library(rgdal); library(devtools)
+
+#set working directory
+setwd("C:/Users/a1667856/Box/PhD/HDU Mapping/Mapping")
+auadm0ll.sf <- st_read(dsn=getwd(), layer="AU_adm0_gen-LL")
+plot(auadm0ll.sf)
+plot(auadm0ll.sf, max.plot=12)
+auadm0ll.bb <- st_bbox(auadm0ll.sf)
+
+setwd("C:/Users/a1667856/Box/PhD/HDU Mapping/Mapping/SILO data/chdu/sine")
+
+# Set the raster file names:
+dseq <- seq(from = as.Date("01-01-2005", format = "%d-%m-%Y"), to = as.Date("31-12-2005", format = "%d-%m-%Y"), by = 1)
+min.pname <- paste("mi", format(dseq, format = "%Y%m%d"), ".txt", sep = "")
+max.pname <- paste("mx", format(dseq, format = "%Y%m%d"), ".txt", sep = "")
+
+hdu.pname <- paste("hdu", format(dseq, format = "%Y%m%d"), ".tif", sep = "")
+chdu.pname <- paste("chdu", format(dseq, format = "%Y%m%d"), ".tif", sep = "")
+img.pname <- paste("chdu", format(dseq, format = "%Y%m%d"), sep = "")
+bchdu.pname <- paste("bchdu", format(dseq, format = "%Y%m%d"), ".tif", sep = "")
+
+#chdu <- ("chdu20200101.tif")
+#chdu.r <- raster(chdu)
+
+myFun <- function(x) {ifelse(x >= 130, 1, 0)}
+#Rn <- calc(chdu.r, myFun)
+#Rn
+#plot(Rn)
+
+for(i in 1:length(dseq)){
+  chdu.r <- raster(chdu.pname[i])
+  Rn <- calc(chdu.r, myFun)
+  plot(Rn)
+  
+  writeRaster(x = Rn, filename = bchdu.pname[i], overwrite = TRUE , format = "GTiff")
+  cat(i, "\n"); flush.console()
+}
+
+obname <- data.frame(idx = 1:length(bchdu.pname), hdu = hdu.pname, chdu = chdu.pname, bchdu = bchdu.pname, img = img.pname)
+
+nday <- length(dseq)
+
+idx.start <- i - (nday - 1)
+idx.stop <- i
+idx <- idx.start:idx.stop 
+thdu.fname <- as.character(obname[idx,4])
+
+tStack <- stack()
+for(j in 1:length(dseq)){
+  traster <- raster(thdu.fname[j])
+  tStack <- stack(tStack, traster)
+}
+
+# Sum all the values in the raster stack:
+tchdu.r <- calc(tStack, sum)
+plot(tchdu.r)
+
+#cellStats(tchdu.r, sum)
+
+#save as geotiff
+writeRaster(x = tchdu.r, filename = "2005_days_at_risk", overwrite = TRUE , format = "GTiff")
+
+#save as png
+png('2005_days_at_risk.png', height=nrow(tchdu.r), width=ncol(tchdu.r)) 
+plot(tchdu.r, maxpixels=ncell(tchdu.r))
+dev.off()
+
+
+#now just looking at the days for each year
+
+
+days2020 <- raster("2020_days_at_risk.tif")
+days2019 <- raster("2019_days_at_risk.tif")
+days2021 <- raster("2021_days_at_risk.tif")
+days2018 <- raster("2018_days_at_risk.tif")
+days2017 <- raster("2017_days_at_risk.tif")
+
+
+plot(days2017)
+contour(days2017, levels = 365, lty = 1, add = TRUE, lwd=1.5, col="purple")
+contour(days2017, levels = 0.0001, lty = 1, add = TRUE, lwd=1.5, col="purple")
+contour(days2017, levels = 183, lty = 1, add = TRUE, lwd=1.5, col="purple")
+
+plot(auadm0ll.sf, add = TRUE, colour="transparent", border="#696969")
+
+
+plot(days2019)
+plot(days2020)
+plot(days2021)
+plot(days2018)
+
+
+#these functions need to be run in order
+#categorise the values: 1 = whole year, 0.75 = >half the year, 0.5 = < half the year, 0 = never
+myFun <- function(x) {ifelse(x!=366 & x>=182, 0.75, x)}
+Rn <- calc(tchdu.r, myFun)
+Rn
+
+myFun <- function(x) {ifelse(x!=366 & x!=0.75 & x < 182 & x!=0, 0.5, x)}
+Rn <- calc(Rn, myFun)
+Rn
+
+myFun <- function(x) {ifelse(x==366, 1, x)}
+Rn <- calc(Rn, myFun)
+Rn
+
+plot(Rn)
+
+cellStats(Rn, summary)
+
+
+###old method
+#myFun <- function(x) {ifelse(x!=365 & x!=0, 0.5, x)}
+#Rn <- calc(days2018, myFun)
+#Rn
+#plot(Rn)
+
+#myFun <- function(x) {ifelse (x==365, 1, x)}
+#Rn <- calc(Rn, myFun)
+#plot(Rn)
+
+##then we can see where it is 1 (whole year), 0.5 (not the whole year) and 0 (never)
+#contour(Rn, levels = 0.5, lty = 1, add = TRUE, lwd=1.5, col="black")
+#contour(Rn, levels=1, lty = 1, add = TRUE, lwd=1.5, col="black")
+#plot(auadm0ll.sf, add = TRUE, colour="transparent", border="#696969")
+
+##____extras
+
+# Set the raster file names:
+dseq <- seq(from = as.Date("01-01-2011", format = "%d-%m-%Y"), to = as.Date("31-12-2011", format = "%d-%m-%Y"), by = 1)
+min.pname <- paste("mi", format(dseq, format = "%Y%m%d"), ".txt", sep = "")
+max.pname <- paste("mx", format(dseq, format = "%Y%m%d"), ".txt", sep = "")
+
+hdu.pname <- paste("hdu", format(dseq, format = "%Y%m%d"), ".tif", sep = "")
+chdu.pname <- paste("chdu", format(dseq, format = "%Y%m%d"), ".tif", sep = "")
+img.pname <- paste("chdu", format(dseq, format = "%Y%m%d"), sep = "")
+bchdu.pname <- paste("bchdu", format(dseq, format = "%Y%m%d"), ".tif", sep = "")
+
+
+#chdu <- ("chdu20200101.tif")
+#chdu.r <- raster(chdu)
+
+myFun <- function(x) {ifelse(x >= 130, 1, 0)}
+#Rn <- calc(chdu.r, myFun)
+#Rn
+#plot(Rn)
+
+for(i in 1:length(dseq)){
+  chdu.r <- raster(chdu.pname[i])
+  Rn <- calc(chdu.r, myFun)
+  plot(Rn)
+  
+  writeRaster(x = Rn, filename = bchdu.pname[i], overwrite = TRUE , format = "GTiff")
+  cat(i, "\n"); flush.console()
+}
+
+obname <- data.frame(idx = 1:length(bchdu.pname), hdu = hdu.pname, chdu = chdu.pname, bchdu = bchdu.pname, img = img.pname)
+
+nday <- length(dseq)
+
+i=365
+idx.start <- i - (nday - 1)
+idx.stop <- i
+idx <- idx.start:idx.stop 
+thdu.fname <- as.character(obname[idx,4])
+
+tStack <- stack()
+for(j in 1:365){
+  traster <- raster(thdu.fname[j])
+  tStack <- stack(tStack, traster)
+}
+
+# Sum all the values in the raster stack:
+tchdu.r <- calc(tStack, sum)
+plot(tchdu.r)
+
+#cellStats(tchdu.r, sum)
+
+#save as geotiff
+writeRaster(x = tchdu.r, filename = "2011_days_at_risk", overwrite = TRUE , format = "GTiff")
+
+#save as png
+png('2011_days_at_risk.png', height=nrow(tchdu.r), width=ncol(tchdu.r)) 
+plot(tchdu.r, maxpixels=ncell(tchdu.r))
+dev.off()
+
+
+dseq <- seq(from = as.Date("01-01-2010", format = "%d-%m-%Y"), to = as.Date("31-12-2010", format = "%d-%m-%Y"), by = 1)
+min.pname <- paste("mi", format(dseq, format = "%Y%m%d"), ".txt", sep = "")
+max.pname <- paste("mx", format(dseq, format = "%Y%m%d"), ".txt", sep = "")
+
+hdu.pname <- paste("hdu", format(dseq, format = "%Y%m%d"), ".tif", sep = "")
+chdu.pname <- paste("chdu", format(dseq, format = "%Y%m%d"), ".tif", sep = "")
+img.pname <- paste("chdu", format(dseq, format = "%Y%m%d"), sep = "")
+bchdu.pname <- paste("bchdu", format(dseq, format = "%Y%m%d"), ".tif", sep = "")
+
+#chdu <- ("chdu20200101.tif")
+#chdu.r <- raster(chdu)
+
+myFun <- function(x) {ifelse(x >= 130, 1, 0)}
+#Rn <- calc(chdu.r, myFun)
+#Rn
+#plot(Rn)
+
+for(i in 1:length(dseq)){
+  chdu.r <- raster(chdu.pname[i])
+  Rn <- calc(chdu.r, myFun)
+  plot(Rn)
+  
+  writeRaster(x = Rn, filename = bchdu.pname[i], overwrite = TRUE , format = "GTiff")
+  cat(i, "\n"); flush.console()
+}
+
+obname <- data.frame(idx = 1:length(bchdu.pname), hdu = hdu.pname, chdu = chdu.pname, bchdu = bchdu.pname, img = img.pname)
+
+nday <- length(dseq)
+
+i=365
+idx.start <- i - (nday - 1)
+idx.stop <- i
+idx <- idx.start:idx.stop 
+thdu.fname <- as.character(obname[idx,4])
+
+tStack <- stack()
+for(j in 1:365){
+  traster <- raster(thdu.fname[j])
+  tStack <- stack(tStack, traster)
+}
+
+# Sum all the values in the raster stack:
+tchdu.r <- calc(tStack, sum)
+plot(tchdu.r)
+
+#cellStats(tchdu.r, sum)
+
+#save as geotiff
+writeRaster(x = tchdu.r, filename = "2010_days_at_risk", overwrite = TRUE , format = "GTiff")
+
+#save as png
+png('2010_days_at_risk.png', height=nrow(tchdu.r), width=ncol(tchdu.r)) 
+plot(tchdu.r, maxpixels=ncell(tchdu.r))
+dev.off()
+
+
+dseq <- seq(from = as.Date("01-01-2009", format = "%d-%m-%Y"), to = as.Date("31-12-2009", format = "%d-%m-%Y"), by = 1)
+min.pname <- paste("mi", format(dseq, format = "%Y%m%d"), ".txt", sep = "")
+max.pname <- paste("mx", format(dseq, format = "%Y%m%d"), ".txt", sep = "")
+
+hdu.pname <- paste("hdu", format(dseq, format = "%Y%m%d"), ".tif", sep = "")
+chdu.pname <- paste("chdu", format(dseq, format = "%Y%m%d"), ".tif", sep = "")
+img.pname <- paste("chdu", format(dseq, format = "%Y%m%d"), sep = "")
+bchdu.pname <- paste("bchdu", format(dseq, format = "%Y%m%d"), ".tif", sep = "")
+
+#chdu <- ("chdu20200101.tif")
+#chdu.r <- raster(chdu)
+
+myFun <- function(x) {ifelse(x >= 130, 1, 0)}
+#Rn <- calc(chdu.r, myFun)
+#Rn
+#plot(Rn)
+
+for(i in 1:length(dseq)){
+  chdu.r <- raster(chdu.pname[i])
+  Rn <- calc(chdu.r, myFun)
+  plot(Rn)
+  
+  writeRaster(x = Rn, filename = bchdu.pname[i], overwrite = TRUE , format = "GTiff")
+  cat(i, "\n"); flush.console()
+}
+
+obname <- data.frame(idx = 1:length(bchdu.pname), hdu = hdu.pname, chdu = chdu.pname, bchdu = bchdu.pname, img = img.pname)
+
+nday <- length(dseq)
+
+i=365
+idx.start <- i - (nday - 1)
+idx.stop <- i
+idx <- idx.start:idx.stop 
+thdu.fname <- as.character(obname[idx,4])
+
+tStack <- stack()
+for(j in 1:365){
+  traster <- raster(thdu.fname[j])
+  tStack <- stack(tStack, traster)
+}
+
+# Sum all the values in the raster stack:
+tchdu.r <- calc(tStack, sum)
+plot(tchdu.r)
+
+#cellStats(tchdu.r, sum)
+
+#save as geotiff
+writeRaster(x = tchdu.r, filename = "2009_days_at_risk", overwrite = TRUE , format = "GTiff")
+
+#save as png
+png('2009_days_at_risk.png', height=nrow(tchdu.r), width=ncol(tchdu.r)) 
+plot(tchdu.r, maxpixels=ncell(tchdu.r))
+dev.off()
