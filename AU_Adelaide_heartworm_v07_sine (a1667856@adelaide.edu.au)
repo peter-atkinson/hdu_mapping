@@ -311,38 +311,106 @@ list.files(path="C:/Users/a1667856/Box/PhD/HDU Mapping/Mapping/sine/cHDUsine2011
 
 # ===================================================================================================
 #Make a csv of the cHDUs
-library(maptools); library(raster); library(spatialkernel)
+library(maptools); library(raster); library(sf); library(sp); library(rgeos); library(rgdal); library(devtools); library(dplyr); library(spatialkernel)
+library(terra)
 
-setwd("D:\\TEMP")
-source("D:\\Software\\Statistics\\R\\dev\\make\\epiR\\misc\\code\\epi.saveplot.r")
+#wd
+setwd("C://Users/a1667856/Box/PhD/HDU Mapping/maps")
 
-# Copy CHDU rasters to working directory:
-unzip("D:\\Contracts\\Australia\\UoA\\Heartworm\\VLSCI\\AU_CHDU_01-Jan-2015_to_31-Dec-2015.zip")
+#read in maps. Do not plot - will crash
+auspoa.sf <- st_read(dsn=getwd(), layer="POA_2021_AUST_GDA2020")
+#plot(ausst.sf)
 
-unzip("F:\\Maps\\Oceania\\Australia\\vector\\AU_states.zip")
-austate.shp <- readShapePoly("AU_states-wgs84")
+#dropping the postcodes that are not within the initial picture - some islands, Lord Howe etc
 
-id <- austate.shp$NAM == "VICTORIA"
-vic.shp <- austate.shp[id,]
+auspoa.sf <- auspoa.sf[-c(661, 662, 2525, 2526, 2642:2644),]
 
-# Generate a list of raster file names:
-dseq <- seq(from = as.Date("01-01-2015", format = "%d-%m-%Y"), to = as.Date("31-12-2015", format = "%d-%m-%Y"), by = 1)
+list <- auspoa.sf$POA_NAME21
+poa.df <- data.frame(list, 0)
+poa.df <- setNames(poa.df, c("poa", "max"))
+
+#surface
+setwd("C://Users/a1667856/Box/PhD/HDU Mapping/Mapping/SILO Data/chdu/sine")
+
+dseq <- seq(from = as.Date("01-01-2018", format = "%d-%m-%Y"), to = as.Date("31-12-2021", format = "%d-%m-%Y"), by = 1)
 hdu.fname <- paste("chdu", format(dseq, format = "%Y%m%d"), ".tif", sep = "")
 
-# Create a *.csv file listing raster cell identifier, date, lon, lat and chdu: 
-for(i in 1:365){
-  traster <- raster(as.character(hdu.fname[i]))
-  traster <- mask(traster, vic.shp)
+pnames <- c(list)
+
+
+#make large df
+currentmax <- as.data.frame(matrix(NA, ncol = length(pnames), nrow = length(dseq)))
+#colnames(currentmax) <- c(pnames)
+row.names(currentmax) <- c(dseq)
+
+currentmin <- as.data.frame(matrix(NA, ncol=length(pnames), nrow = length(dseq)))
+row.names(currentmin) <- c(dseq)
+
+currentmed <- as.data.frame(matrix(NA, ncol=length(pnames), nrow = length(dseq)))
+row.names(currentmed) <- c(dseq)
+
+currentmean <- as.data.frame(matrix(NA, ncol=length(pnames), nrow = length(dseq)))
+row.names(currentmean) <- c(dseq) 
+
+# Create a data frame of file indexes and the path to the source HDU files, the destination CHDU file names ('chdu' = cumulative HDU) and the image files:
+obname <- data.frame(idx = 1:length(list), poa = auspoa.sf$POA_NAME21)
+dseq.df <- data.frame(idx = 1:length(dseq), dseq=dseq)
+
+#take each raster
+traster <- raster(as.character(hdu.fname[i]))
+plot(traster)
+
+for (i in 6:length(dseq)){
+  traster <- rast(as.character(hdu.fname[i]))
+  plot(traster)
   
-  tdat <- as.data.frame(rasterToPoints(traster))
-  tdat[,3] <- round(tdat[,3], digits = 0)
+  for (j in 1:(length(pnames))){
+  #subset the map of Australia to an area of interest
+  id <- auspoa.sf$POA_NAME21 == list[j]
+  tauspoa.sf <- auspoa.sf[id,]
+  #plot(tauspoa.sf)
   
-  tdat$date <- dseq[i]
-  tdat$id <- 1:nrow(tdat)
-  tdat <- tdat[,c(5,4,1,2,3)]
-  names(tdat)[5] <- "chdu"
-  write.table(tdat, file = "AU_Vic_CHDU_2015.csv", append = TRUE, sep = ",", row.names = FALSE, col.names = FALSE)
+  #extract data specific to that area, and run a function (max)
+  x <- extract(traster, tauspoa.sf, fun=summary, na.rm=TRUE, df=FALSE)
+  x[,7] <- if_else(x[,7]==-Inf, -1, x[,7])
+  x[,4] <- if_else(x[,4]==-Inf, -1, x[,4])
+  x[,2] <- if_else(x[,2]==-Inf, -1, x[,2])
+  x[,5] <- if_else(x[,5]==-Inf, -1, x[,5])
+  
+  #print it in the dataframe, as long as there is a value. Otherwise, print it as the previous postcode
+  currentmax[i,j] <- x[,7]
+  currentmed[i,j] <- x[,4]
+  currentmin[i,j] <- x[,2]
+  currentmean[i,j] <- x[,5]
+  
+  #`2015.df`[i,j] <- if_else(x[,2]>0, x[,2], `2015.df`[i,(j-1)])
+  #z <- if_else(`2015.df`[i,(j-1)]==-Inf, -1, `2015.df`[i,(j-1)])
+  #`2015.df`[i,j] <- if_else(x[,2]==-Inf, -1, x[,2])
+  #poa.df$max[j] <- if_else(x[,2]>0, x[,2], 0)
+  #poa.df$max[j] <- if_else(x[,2]>0, x[,2], (poa.df$max[j-1]))
+  
+  cat(j, "\n"); flush.console()
+  
+  }
+
+  #year.df[i,j] <- poa.df$max[j]
+  cat(i, "\n"); flush.console()
 }
+
+
+
+#now work on only displaying the data for a specific input postcode
+input <- 0872
+postcode <- ifelse(input < 1000, paste0("0", input), input)
+
+z <- which(pnames==postcode)
+
+loc <- data.frame(dseq[1:(nrow(first))], first[,z])
+
+
+ifelse(loc[,2]>130, 1, 0)
+plotnames <- c("date", "chdu")
+colnames(loc) <- c(plotnames)
 
 
 #=============================================================================
