@@ -1,31 +1,38 @@
 fluidPage(titlePanel("Heartworm stuff"),
           fluidRow(
             column(6,
-                   wellPanel(h3("As of", (Sys.Date()-2), ", where can heartworm be transmitted?"),
+                   wellPanel(h3(textOutput("selecteddatemap"),
                              br(),
-                             plotOutput("binaryoutput"))),
+                             dateInput("dates", label=NULL, value = (Sys.Date()-2), min = min(dseq), max = max(dseq)),
+                             plotOutput("binaryoutput", height=700, width=850))),
+                   br(),
+                   br(),
+                   br(),
+                   br()),
             column(6,
                    wellPanel(h4(strong('What is happening in the capital cities?')),
-                             tableOutput("capital.cities")))
-          ),
-          fluidRow(
+                             tableOutput("capital.cities"))),
             column(6,
-                   wellPanel(img(src = "chdu2011sine.gif", 
-                                 height = 600, width = 600)))
-            ),
+                   wellPanel(img(src = "10 year plot.png", 
+                                 height = 700, width = 750)))
+          ),
           fluidRow(
             column(12,
                    wellPanel((h3("Location")),
                              # br(),
                              textInput("postcode", "Enter your postcode:"),
-                             # textOutput("location"),
                              textOutput("postcode"),),
                    plotOutput("locationplot")
                    )
             ),
           fluidRow(
            column(6,
-                   wellPanel(dataTableOutput("cutofftable"))
-            )
+                  wellPanel(p(strong(paste(as.Date((Sys.Date()-2), format = "%d-%m-%Y"), "'s", " status:", sep="")),
+                              textOutput(("dailystatus")))),
+                  wellPanel(dataTableOutput("cutofftable"))
+            ),
+           column(6,
+                  wellPanel(dataTableOutput("percentagetable")))
           )
 )
+
