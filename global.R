@@ -2,17 +2,25 @@ library(shiny); library(lubridate); library(DT); library(ggplot2); library(sf);
 library(sp); library(cropgrowdays); library(RColorBrewer); library(dplyr); library(scales);
 library(maptools); library(raster); library(sf); library(sp); library(rgeos); library(rgdal); library(devtools)
 library(terra); library(rasterVis); library(tmap); library(tmaptools)
-library(plyr); library(busdater); library(stringr)
+library(plyr); library(busdater); library(stringr); library(dplyr)
 
 
-dseq <- seq(from = as.Date("01-01-2015", format = "%d-%m-%Y"), to = (as.Date(Sys.Date()-2, format = "%d-%m-%Y")), by = 1)
+dseq <- seq(from = as.Date("01-01-2015", format = "%d-%m-%Y"), to = as.Date(Sys.Date()-2, format = "%d-%m-%Y"), by = 1)
+
+#
+
 yseq.df <- count(data.frame(dseq, year = strftime(dseq, "%Y")), "year")
 
 #
 
 list <- readRDS("list")
 
-postcodes.all <- readRDS("poa20152022max.RDS")
+poa20152022max <- readRDS("newpoa20152022max.RDS")
+poa2023max <- readRDS("poa2023max.RDS")
+
+postcodes.all <- bind_rows(poa20152022max, poa2023max)
+  
+  
 rownames(postcodes.all) <- dseq
 
 #currentmax.df <- readRDS("currentmax.RDS")
