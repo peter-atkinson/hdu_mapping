@@ -26,8 +26,8 @@ library(raster)
 
 #unzip("D:\\Maps\\Oceania\\Australia\\vector\\AU_adm.zip")
 auadm0ll.sf <- st_read(dsn="C:/Users/a1667856/Box/PhD/HDU Mapping/hdu_mapping/maps", layer="AU_adm0_gen-LL")
-plot(auadm0ll.sf)
-plot(auadm0ll.sf, max.plot=12)
+#plot(auadm0ll.sf)
+#plot(auadm0ll.sf, max.plot=12)
 auadm0ll.bb <- st_bbox(auadm0ll.sf)
 
 fn <- "2023.min.nc"
@@ -46,11 +46,12 @@ for(i in i:i){
   trasbrick <- brick(fn)
   #subset only 1 date - date is i to i
   tmin.r <- subset(trasbrick, i:i)
-  plot(tmin.r)
+  #plot(tmin.r)
   
   #repeat for t max
   trasbrick <- brick(fx)
   tmax.r <- subset(trasbrick, i:i)
+  #plot(tmax.r)
   
   Tavg <- (tmax.r+tmin.r)/2
   base <- 14

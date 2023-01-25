@@ -47,8 +47,8 @@ function(input,output,session){
     # Return a list containing the filename and alt text
     list(src = filename,
          alt = paste("Image number", input$summaryselection),
-         height=650,
-         width=700)
+         #height=400,
+         width="100%")
     
   }, deleteFile = FALSE)
   
